@@ -1,7 +1,14 @@
 import unittest
 from unittest.mock import patch
 
-from web_app import parse_google_news_rss, prepare_news, summarize_text, translate_to_korean
+from web_app import (
+    FALLBACK_IMAGE_URL,
+    extract_image_url,
+    parse_google_news_rss,
+    prepare_news,
+    summarize_text,
+    translate_to_korean,
+)
 
 
 SAMPLE_RSS = """<?xml version='1.0' encoding='UTF-8'?>
@@ -11,18 +18,23 @@ SAMPLE_RSS = """<?xml version='1.0' encoding='UTF-8'?>
     <link>https://example.com/a</link>
     <pubDate>Mon, 02 Dec 2024 10:00:00 GMT</pubDate>
     <source>TechCrunch</source>
-    <description>New features for creators and marketers.</description>
+    <description><![CDATA[<img src="https://img.example.com/thumb.jpg"/>New features for creators and marketers.]]></description>
   </item>
 </channel></rss>
 """
 
 
 class NewsParsingTests(unittest.TestCase):
+    def test_extract_image_url(self):
+        raw = '<div><img src="https://cdn.example.com/a.jpg" /></div>'
+        self.assertEqual(extract_image_url(raw), "https://cdn.example.com/a.jpg")
+
     def test_parse_google_news_rss(self):
         items = parse_google_news_rss(SAMPLE_RSS)
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]["title"], "AI image model update released")
         self.assertEqual(items[0]["source"], "TechCrunch")
+        self.assertEqual(items[0]["image_url"], "https://img.example.com/thumb.jpg")
 
     def test_summarize_text_truncates_long_text(self):
         long_description = "A" * 300
@@ -40,14 +52,16 @@ class NewsParsingTests(unittest.TestCase):
                 "pub_date": "Mon, 02 Dec 2024 10:00:00 GMT",
                 "source": "The Verge",
                 "description": "Startup announced a new model.",
+                "image_url": "",
             }
         ],
     )
-    def test_prepare_news_includes_translated_fields(self, _mock_fetch, _mock_translate):
-        news = prepare_news("ai")
+    def test_prepare_news_includes_translated_fields_and_fallback_image(self, _mock_fetch, _mock_translate):
+        news = prepare_news("ai", max_items=5)
         self.assertEqual(len(news), 1)
         self.assertTrue(news[0]["title_ko"].startswith("KO:"))
         self.assertIn("summary_ko", news[0])
+        self.assertEqual(news[0]["image_url"], FALLBACK_IMAGE_URL)
 
     @patch("web_app.request.urlopen", side_effect=Exception("network blocked"))
     def test_translate_to_korean_fallbacks_to_original(self, _mock_urlopen):

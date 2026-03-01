@@ -10,9 +10,11 @@ from urllib import parse, request
 import xml.etree.ElementTree as ET
 
 GOOGLE_NEWS_RSS = "https://news.google.com/rss/search"
+MAX_NEWS_ITEMS = 5
+FALLBACK_IMAGE_URL = "https://images.unsplash.com/photo-1677442135722-5f6f3f8f38c4?auto=format&fit=crop&w=1200&q=60"
 
 
-def fetch_google_news(query: str, max_items: int = 8) -> list[dict[str, str]]:
+def fetch_google_news(query: str, max_items: int = MAX_NEWS_ITEMS) -> list[dict[str, str]]:
     params = parse.urlencode(
         {
             "q": query,
@@ -37,7 +39,9 @@ def parse_google_news_rss(xml_payload: str) -> list[dict[str, str]]:
         link = clean_text(item.findtext("link", default=""))
         pub_date = clean_text(item.findtext("pubDate", default=""))
         source = clean_text(item.findtext("source", default=""))
-        description = clean_text(item.findtext("description", default=""))
+        raw_description = item.findtext("description", default="")
+        description = clean_text(raw_description)
+        image_url = extract_image_url(raw_description)
 
         if title and link:
             items.append(
@@ -47,9 +51,17 @@ def parse_google_news_rss(xml_payload: str) -> list[dict[str, str]]:
                     "pub_date": pub_date,
                     "source": source,
                     "description": description,
+                    "image_url": image_url,
                 }
             )
     return items
+
+
+def extract_image_url(raw_html: str) -> str:
+    if not raw_html:
+        return ""
+    match = re.search(r"<img[^>]+src=['\"]([^'\"]+)['\"]", raw_html, flags=re.IGNORECASE)
+    return html.unescape(match.group(1)).strip() if match else ""
 
 
 def clean_text(raw_text: str) -> str:
@@ -89,19 +101,19 @@ def format_pub_date(pub_date: str) -> str:
         return pub_date
 
 
-def prepare_news(query: str) -> list[dict[str, str]]:
+def prepare_news(query: str, max_items: int = MAX_NEWS_ITEMS) -> list[dict[str, str]]:
     prepared: list[dict[str, str]] = []
-    for item in fetch_google_news(query):
+    for item in fetch_google_news(query, max_items=max_items):
         summary = summarize_text(item["title"], item["description"])
         prepared.append(
             {
                 "title": item["title"],
                 "title_ko": translate_to_korean(item["title"]),
-                "summary": summary,
                 "summary_ko": translate_to_korean(summary),
                 "link": item["link"],
                 "source": item["source"] or "출처 미표기",
                 "pub_date": format_pub_date(item["pub_date"]),
+                "image_url": item["image_url"] or FALLBACK_IMAGE_URL,
             }
         )
     return prepared
@@ -109,21 +121,24 @@ def prepare_news(query: str) -> list[dict[str, str]]:
 
 def render_news_cards(news_items: list[dict[str, str]]) -> str:
     if not news_items:
-        return "<p>표시할 뉴스가 없습니다.</p>"
+        return "<p class='empty'>표시할 뉴스가 없습니다.</p>"
 
     cards = []
     for item in news_items:
         cards.append(
             f"""
             <article class='card'>
-              <h3>{html.escape(item['title_ko'])}</h3>
-              <p class='origin-title'>원문: {html.escape(item['title'])}</p>
-              <p>{html.escape(item['summary_ko'])}</p>
-              <div class='meta'>
-                <span>{html.escape(item['source'])}</span>
-                <span>{html.escape(item['pub_date'])}</span>
+              <img class='thumb' src='{html.escape(item['image_url'])}' alt='news image' loading='lazy'/>
+              <div class='content'>
+                <h3>{html.escape(item['title_ko'])}</h3>
+                <p class='origin-title'>원문: {html.escape(item['title'])}</p>
+                <p class='summary'>{html.escape(item['summary_ko'])}</p>
+                <div class='meta'>
+                  <span>{html.escape(item['source'])}</span>
+                  <span>{html.escape(item['pub_date'])}</span>
+                </div>
+                <a href='{html.escape(item['link'])}' target='_blank' rel='noopener noreferrer'>원문 보기</a>
               </div>
-              <a href='{html.escape(item['link'])}' target='_blank' rel='noopener noreferrer'>원문 보기</a>
             </article>
             """
         )
@@ -140,40 +155,63 @@ def render_page(image_news: list[dict[str, str]], video_news: list[dict[str, str
   <meta name='viewport' content='width=device-width,initial-scale=1' />
   <title>AI 이미지/영상 뉴스 브리핑</title>
   <style>
-    body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 0; background: #f6f8fb; color: #111827; }}
-    .container {{ max-width: 980px; margin: 0 auto; padding: 28px 20px 50px; }}
-    h1 {{ margin-bottom: 8px; }}
-    .desc {{ color: #4b5563; margin-bottom: 20px; }}
-    .tabs {{ display: flex; gap: 8px; margin-bottom: 20px; }}
-    .tab-btn {{ border: 1px solid #d1d5db; background: white; border-radius: 10px; padding: 10px 14px; cursor: pointer; font-weight: 600; }}
-    .tab-btn.active {{ background: #111827; color: white; border-color: #111827; }}
+    :root {{
+      --bg: #f3f6fb;
+      --card: #ffffff;
+      --text: #0f172a;
+      --muted: #64748b;
+      --line: #e2e8f0;
+      --accent: #1d4ed8;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{ margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); }}
+    .container {{ max-width: 1060px; margin: 0 auto; padding: 32px 20px 56px; }}
+    .hero {{ background: linear-gradient(135deg, #0f172a, #1e3a8a); color: white; border-radius: 18px; padding: 24px; margin-bottom: 20px; }}
+    .hero h1 {{ margin: 0 0 8px; font-size: 28px; }}
+    .hero p {{ margin: 0; color: #dbeafe; }}
+    .tabs {{ display: flex; gap: 10px; margin-bottom: 16px; }}
+    .tab-btn {{ border: 1px solid var(--line); background: white; border-radius: 999px; padding: 10px 16px; cursor: pointer; font-weight: 700; color: #1e293b; }}
+    .tab-btn.active {{ background: var(--accent); color: white; border-color: var(--accent); }}
     .panel {{ display: none; }}
     .panel.active {{ display: block; }}
     .grid {{ display: grid; gap: 14px; }}
-    .card {{ background: white; border: 1px solid #e5e7eb; border-radius: 12px; padding: 16px; box-shadow: 0 4px 10px rgba(0,0,0,0.03); }}
-    .card h3 {{ margin: 0 0 8px; font-size: 18px; }}
-    .origin-title {{ margin: 0 0 10px; color: #6b7280; font-size: 13px; }}
-    .meta {{ display: flex; justify-content: space-between; color: #6b7280; font-size: 12px; margin-top: 10px; margin-bottom: 10px; }}
-    a {{ color: #2563eb; text-decoration: none; font-weight: 600; }}
+    .card {{ background: var(--card); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; display: grid; grid-template-columns: 220px 1fr; box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06); }}
+    .thumb {{ width: 100%; height: 100%; min-height: 170px; object-fit: cover; background: #cbd5e1; }}
+    .content {{ padding: 16px 18px; }}
+    .card h3 {{ margin: 0 0 8px; font-size: 20px; line-height: 1.35; }}
+    .origin-title {{ margin: 0 0 8px; color: var(--muted); font-size: 13px; }}
+    .summary {{ margin: 0 0 10px; line-height: 1.5; }}
+    .meta {{ display: flex; gap: 10px; justify-content: space-between; color: var(--muted); font-size: 12px; margin-bottom: 12px; }}
+    a {{ color: var(--accent); text-decoration: none; font-weight: 700; }}
+    .empty {{ color: var(--muted); }}
+    .count {{ color: #334155; font-size: 14px; margin: 8px 0 12px; }}
+    @media (max-width: 768px) {{
+      .card {{ grid-template-columns: 1fr; }}
+      .thumb {{ height: 190px; }}
+    }}
   </style>
 </head>
 <body>
   <div class='container'>
-    <h1>AI 이미지 / 영상 뉴스 브리핑</h1>
-    <p class='desc'>해외 뉴스를 한국어로 번역해 핵심만 깔끔하게 정리한 페이지입니다.</p>
+    <div class='hero'>
+      <h1>AI 이미지 / 영상 뉴스 브리핑</h1>
+      <p>해외 뉴스를 한국어로 요약/번역해 카테고리별 상위 5개만 빠르게 확인하세요.</p>
+    </div>
 
     <div class='tabs'>
-      <button class='tab-btn active' data-tab='image'>이미지</button>
-      <button class='tab-btn' data-tab='video'>영상</button>
+      <button class='tab-btn active' data-tab='image'>이미지 뉴스</button>
+      <button class='tab-btn' data-tab='video'>영상 뉴스</button>
     </div>
 
     <section id='image' class='panel active'>
+      <p class='count'>총 {len(image_news)}건</p>
       <div class='grid'>
         {image_cards}
       </div>
     </section>
 
     <section id='video' class='panel'>
+      <p class='count'>총 {len(video_news)}건</p>
       <div class='grid'>
         {video_cards}
       </div>
@@ -200,8 +238,8 @@ def render_page(image_news: list[dict[str, str]], video_news: list[dict[str, str
 class NewsHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         try:
-            image_news = prepare_news("AI image generation OR text-to-image")
-            video_news = prepare_news("AI video generation OR text-to-video")
+            image_news = prepare_news("AI image generation OR text-to-image", max_items=MAX_NEWS_ITEMS)
+            video_news = prepare_news("AI video generation OR text-to-video", max_items=MAX_NEWS_ITEMS)
             body = render_page(image_news, video_news)
             self._send_html(body)
         except Exception as exc:  # pragma: no cover
